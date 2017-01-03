@@ -17,23 +17,36 @@ class Promise {
   }
 
   resolve(value) {
-    this.value = value
-
     // 第一个then出列
     const then = this.callbacks.shift()
 
     // 没有then，则该Promise完成
-    if (! then) {
+    if (this._isEmpty(then)) {
       this.status = Promise.status.RESOLVED
+      this.value = value
       return
     }
+
+    // 如果状态为Rejected，则直接调用onRejected
+    if (this._isRejected()) {
+      if (this._isFunction(then.onRejected)) {
+        then.onRejected()
+      } else {
+        this.resolve(value)
+      }
+      return
+    }
+
+    // onFulifilled不存在，则跳至下一个then
+    if (! this._isFunction(then.onFulfilled)) return this.resolve(value)
 
     // 调用then，获取返回值
     let nextValue = null
     try {
-      nextValue = then.fulfilled(value)
+      nextValue = then.onFulfilled(value)
     } catch (e) {
-      rejected(e)
+      if (this._isFunction(then.onRejected)) then.onRejected(e)
+      return
     }
 
     // 如果返回值是一个Promise
@@ -47,15 +60,34 @@ class Promise {
   }
 
   reject(error) {
+    if (this._isRejected()) return
+
     this.status = Promise.status.REJECTED
     this.value = error
-    throw new Error(error)
+    this.resolve(error)
+    // throw new Error(error)
   }
 
-  then(fulfilled, rejected) {
-    this.callbacks.push({ fulfilled, rejected })
+  then(onFulfilled, onRejected) {
+    this.callbacks.push({ onFulfilled, onRejected })
 
     return this
+  }
+
+  _isFunction(f) {
+    return typeof f == 'function'
+  }
+
+  _isRejected() {
+    return this.status == Promise.status.REJECTED
+  }
+
+  _isFulfilled() {
+    return this.status == Promise.status.RESOLVED
+  }
+
+  _isEmpty(o) {
+    return o == null
   }
 }
 
@@ -73,7 +105,10 @@ Promise.resolve = value => {
   return new Promise((resolve, reject) => setTimeout(() => resolve(value)))
 }
 
-Promise.reject = error => new Promise((resolve, reject) => reject(error))
+Promise.reject = error => {
+  if (Promise.isPromise(error)) return error
+  return new Promise((resolve, reject) => setTimeout(() => reject(error)))
+}
 
 // 并发数组
 Promise.all = promises => new Promise((resolve, reject) => {
@@ -115,9 +150,9 @@ Promise.assign = object => new Promise((resolve, reject) => {
   }
 })
 
-const time = () => new Promise((resolve, reject) => {
-  setTimeout(() => resolve(1), 1000)
-})
+// const time = () => new Promise((resolve, reject) => {
+//   setTimeout(() => resolve(1), 1000)
+// })
 
 // Promise.resolve()
 //   .then(() => console.log(1))
@@ -129,12 +164,31 @@ const time = () => new Promise((resolve, reject) => {
 
 // Promise.all([time(), time(), time()]).then(values => console.log(values))
 
-Promise.assign({
-  1: time(),
-  2: time(),
-  3: time(),
-  4: Promise.resolve(1),
-  5: bluebird.delay(3000, 2) // 兼容Bluebird的Promise
-})
-.then(object => console.log(object))
+// Promise.assign({
+//   1: time(),
+//   2: time(),
+//   3: time(),
+//   4: Promise.resolve(1),
+//   5: bluebird.delay(3000, 2) // 兼容Bluebird的Promise
+// })
+// .then(object => console.log(object))
+
+
+// Promise A+
+
+Promise.deferred = () => {
+  const promise = new Promise((resolve, reject) => {})
+
+  return {
+    promise,
+    resolve: promise.resolve,
+    reject: promise.reject
+  }
+}
+
+Promise.resolved = Promise.reject
+
+Promise.rejected = Promise.resolve
+
+module.exports = Promise
 
