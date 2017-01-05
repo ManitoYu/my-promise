@@ -2,112 +2,167 @@ const bluebird = require('bluebird')
 
 class Promise {
   constructor(fn) {
-    // 当前Promise状态
     this.status = Promise.status.PENDING
     this.value = null
 
-    // then队列
-    this.callbacks = []
+    this.handlers = []
 
     this.resolve = this.resolve.bind(this)
     this.reject = this.reject.bind(this)
 
-    // EventLoop
-    setTimeout(() => fn(this.resolve, this.reject))
+    this._doResolve(fn, this.resolve, this.reject)
   }
 
   resolve(value) {
-    // 第一个then出列
-    const then = this.callbacks.shift()
+    // 2.3.1: If `promise` and `x` refer to the same object, reject `promise` with a `TypeError' as the reason.
+    if (value == this) throw new TypeError
 
-    // 没有then，则该Promise完成
-    if (this._isEmpty(then)) {
-      this.status = Promise.status.RESOLVED
-      this.value = value
-      return
+    // 2.3.3 `x` is an object with normal Object.prototype
+    // then方法只能被访问一次，否则通过不了测试，采取变量持有引用的方式来解决
+    const then = this._getThen(value)
+
+    if (then) {
+      // 2.3.2.2: If/when `x` is fulfilled, fulfill `promise` with the same value.
+      // 这里需要对value进行this绑定
+      return this._doResolve(then.bind(value), this.resolve, this.reject)
     }
 
-    // 如果状态为Rejected，则直接调用onRejected
-    if (this._isRejected()) {
-      if (this._isFunction(then.onRejected)) {
-        then.onRejected()
-      } else {
-        this.resolve(value)
-      }
-      return
-    }
-
-    // onFulifilled不存在，则跳至下一个then
-    if (! this._isFunction(then.onFulfilled)) return this.resolve(value)
-
-    // 调用then，获取返回值
-    let nextValue = null
-    try {
-      nextValue = then.onFulfilled(value)
-    } catch (e) {
-      if (this._isFunction(then.onRejected)) then.onRejected(e)
-      return
-    }
-
-    // 如果返回值是一个Promise
-    if (Promise.isPromise(nextValue)) {
-      // 等待另一个Promise完成后，再调用当前Promise的操作
-      return nextValue.then(this.resolve, this.reject)
-    }
-
-    // 继续传递该值给队列中下一个then
-    return this.resolve(nextValue)
+    this.fulfill(value)
   }
 
-  reject(error) {
-    if (this._isRejected()) return
+  fulfill(value) {
+    if (! this._isPending()) return
+    setTimeout(() => {
+      this._beResolved()
+      this.value = value
+      this.handlers.forEach(handler => handler.onFulfilled(value))
+    })
+  }
 
-    this.status = Promise.status.REJECTED
-    this.value = error
-    this.resolve(error)
-    // throw new Error(error)
+  reject(reason) {
+    if (! this._isPending()) return
+    setTimeout(() => {
+      this._beRejected()
+      this.value = reason
+      this.handlers.forEach(handler => handler.onRejected(reason))
+    })
   }
 
   then(onFulfilled, onRejected) {
-    this.callbacks.push({ onFulfilled, onRejected })
-
-    return this
+    return new Promise((resolve, reject) => {
+      this.done(value => {
+        if (! this._isFunction(onFulfilled)) return resolve(value)
+        try {
+          return resolve(onFulfilled(value))
+        } catch (e) {
+          return reject(e)
+        }
+      }, reason => {
+        if (! this._isFunction(onRejected)) return reject(reason)
+        try {
+          return resolve(onRejected(reason))
+        } catch (e) {
+          return reject(e)
+        }
+      })
+    })
   }
 
+  done(onFulfilled, onRejected) {
+    setTimeout(() => this._handle({ onFulfilled, onRejected }))
+  }
+
+  _handle(handler) {
+    switch (true) {
+      case this._isPending(): this.handlers.push(handler); break
+      case this._isResolved(): handler.onFulfilled(this.value); break
+      case this._isRejected(): handler.onRejected(this.value); break
+    }
+  }
+
+  _doResolve(fn, onFulfilled, onRejected) {
+    try {
+      fn(onFulfilled, onRejected)
+    } catch (e) {
+      onRejected(e)
+    }
+  }
+
+  // utils
   _isFunction(f) {
     return typeof f == 'function'
+  }
+
+  _isPlainObject(o) {
+    return typeof o == 'object' && o instanceof Object
+  }
+
+  _isBoolean(b) {
+    return typeof b == 'boolean'
+  }
+
+  _isNumber(n) {
+    return typeof n == 'number'
   }
 
   _isRejected() {
     return this.status == Promise.status.REJECTED
   }
 
-  _isFulfilled() {
+  _isResolved() {
     return this.status == Promise.status.RESOLVED
+  }
+
+  _isPending() {
+    return this.status == Promise.status.PENDING
   }
 
   _isEmpty(o) {
     return o == null
+  }
+
+  _beRejected() {
+    this.status = Promise.status.REJECTED
+  }
+
+  _beResolved() {
+    this.status = Promise.status.RESOLVED
+  }
+
+  _bePending() {
+    this.status = Promise.status.PENDING
+  }
+
+  _getThen(value) {
+    // 2.3.4: If `x` is not an object or function, fulfill `promise` with `x`
+    if (this._isEmpty(value)) return null
+    if (this._isBoolean(value)) return null
+    if (this._isNumber(value)) return null
+    const then = Object(value).then
+    if (! this._isFunction(then)) return null
+    return then
   }
 }
 
 // Promise状态常量
 Promise.status = {
   PENDING: 0, // 等待
-  RESOLVED: 1, // 成功
-  REJECTED: 2 // 失败
+  RESOLVED: 1, // 接受
+  REJECTED: 2 // 拒绝
 }
 
 Promise.isPromise = value => Object(value).then != undefined
 
 Promise.resolve = value => {
   if (Promise.isPromise(value)) return value
-  return new Promise((resolve, reject) => setTimeout(() => resolve(value)))
+  // 这里要采用定时器，否则在resolve的时候，then队列还是空的
+  // 先要等所有的计算代码执行完毕，事件都注册好后，再执行事件
+  return new Promise((resolve, reject) => resolve(value))
 }
 
-Promise.reject = error => {
-  if (Promise.isPromise(error)) return error
-  return new Promise((resolve, reject) => setTimeout(() => reject(error)))
+Promise.reject = reason => {
+  if (Promise.isPromise(reason)) return reason
+  return new Promise((resolve, reject) => reject(reason))
 }
 
 // 并发数组
@@ -150,6 +205,11 @@ Promise.assign = object => new Promise((resolve, reject) => {
   }
 })
 
+// 竞争
+Promise.race = promises => new Promise((resolve, reject) => {
+  promises.map(p => p.then(v => resolve(v)))
+})
+
 // const time = () => new Promise((resolve, reject) => {
 //   setTimeout(() => resolve(1), 1000)
 // })
@@ -186,9 +246,9 @@ Promise.deferred = () => {
   }
 }
 
-Promise.resolved = Promise.reject
+Promise.resolved = Promise.resolve
 
-Promise.rejected = Promise.resolve
+Promise.rejected = Promise.reject
 
 module.exports = Promise
 
