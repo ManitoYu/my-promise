@@ -15,11 +15,17 @@ class Promise {
 
   resolve(value) {
     // 2.3.1: If `promise` and `x` refer to the same object, reject `promise` with a `TypeError' as the reason.
-    if (value == this) throw new TypeError
+    if (value == this) return this.reject(new TypeError)
 
     // 2.3.3 `x` is an object with normal Object.prototype
     // then方法只能被访问一次，否则通过不了测试，采取变量持有引用的方式来解决
-    const then = this._getThen(value)
+    let then = null
+    // an object with a throwing `then` accessor
+    try {
+      then = this._getThen(value)
+    } catch (e) {
+      return this.reject(e)
+    }
 
     if (then) {
       // 2.3.2.2: If/when `x` is fulfilled, fulfill `promise` with the same value.
@@ -40,7 +46,6 @@ class Promise {
   }
 
   reject(reason) {
-    if (! this._isPending()) return
     setTimeout(() => {
       this._beRejected()
       this.value = reason
@@ -81,9 +86,24 @@ class Promise {
   }
 
   _doResolve(fn, onFulfilled, onRejected) {
+    // 2.3.3.3.1 `y` is a thenable that tries to fulfill twice for an eventually-fulfilled promise
+    // 如果onFulfilled或onRejected被调用一次，则不能再次调用
+    // 采用一个函数包装onFulfilled和onRejected，用一个标记来控制调用
+    let done = false
     try {
-      fn(onFulfilled, onRejected)
+      fn(value => {
+        if (done) return
+        done = true
+        onFulfilled(value)
+      }, reason => {
+        if (done) return
+        done = true
+        onRejected(reason)
+      })
     } catch (e) {
+      // 2.3.3.3.4: If calling `then` throws an exception `e`
+      if (done) return
+      done = true
       onRejected(e)
     }
   }
@@ -207,7 +227,7 @@ Promise.assign = object => new Promise((resolve, reject) => {
 
 // 竞争
 Promise.race = promises => new Promise((resolve, reject) => {
-  promises.map(p => p.then(v => resolve(v)))
+  promises.map(p => p.then(v => resolve(v)), e => reject(e))
 })
 
 // const time = () => new Promise((resolve, reject) => {

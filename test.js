@@ -2,13 +2,29 @@ const promisesAplusTests = require('promises-aplus-tests')
 const Promise = require('./index')
 const assert = require('assert')
 
+// const a = {
+//   then: onFulfilled => {
+//     onFulfilled(b)
+//   }
+// }
+
+// const b = {
+//   then: onFulfilled => {
+//     onFulfilled('ok')
+//     onFulfilled('other')
+//   }
+// }
+
+// Promise.resolve('ok').then(v => a).then(v => console.log(v))
+
+// Promise.resolve(1).then(a => console.log(1))
+
 // Promise.resolve().then(null, () => Promise.reject('reject')).then(() => console.log(1))
 
 // Promise.resolve(Promise.reject(2)).then(null, a => console.log(a))
 
-promisesAplusTests(Promise, { reporter: 'spec' }, function (err) {
-    
-})
+// promisesAplusTests(Promise, { reporter: 'spec' }, function (err) {
+// })
 
 // const promise = Promise.resolve(1)
 
@@ -127,7 +143,7 @@ promisesAplusTests(Promise, { reporter: 'spec' }, function (err) {
 **********/
 
 // const promise = Promise.resolve(1).then(() => promise)
-// promise.then(null, reason => console.log(reason))
+// promise.then(() => console.log(1), reason => console.log(reason))
 
 /**********
 TypeError
@@ -165,3 +181,42 @@ TypeError
 
 // Boolean.prototype.then = () => {}
 // Promise.resolve(1).then(() => true).then(a => console.log(a))
+
+
+// const d = Promise.deferred()
+// setTimeout(() => d.resolve(1), 50)
+
+// const a = {
+//   then: onFulfilled => {
+//     onFulfilled(d.promise)
+//     throw 2
+//   }
+// }
+
+// Promise.resolve().then(() => a).then(v => console.log(v))
+
+let numberOfTimesThenRetrieved = 0
+const a = Object.create(null, {
+  then: {
+    // get: function () {
+    //   if (numberOfTimesThenRetrieved === 0) {
+    //     ++ numberOfTimesThenRetrieved
+    //     return function (onFulfilled, onRejected) {
+    //       onRejected(2)
+    //     }
+    //   }
+    //   return null
+    // }
+    get: () => {
+      throw 3
+    }
+  }
+})
+
+const b = {
+  then: (onFulfilled, onRejected) => {
+    setTimeout(() => onFulfilled(a))
+  }
+}
+
+Promise.resolve({ sentinel: 'sentinel' }).then(() => b).then(v => console.log(1, v), e => e).then(v => console.log(v))
